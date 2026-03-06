@@ -1,0 +1,68 @@
+# torchmill example config — shows all available options.
+# Run with: torchmill train --config configs/example.yaml
+
+model:
+  class: mypackage.models.MyModel   # importable dotted path to an nn.Module subclass
+  args:
+    input_dim: 10
+    hidden_dim: 256
+    output_dim: 1
+
+data:
+  type: csv                         # csv | relbench | custom
+  train_path: ./data/train.csv
+  val_path: ./data/val.csv
+  test_path: ./data/test.csv        # optional
+  target_column: label
+  batch_size: 32
+  num_workers: 4
+  shuffle: true
+
+  # RelBench-specific (used when type: relbench)
+  # dataset_name: trial
+  # task_name: user-churn
+
+training:
+  epochs: 100
+  seed: 42
+  device: auto                      # auto | cpu | cuda | mps | cuda:1
+  task: auto                        # auto | classification | regression
+  amp: true                         # mixed precision (CUDA only)
+  gradient_clip: 1.0
+
+  optimizer:
+    type: adamw                     # adam | adamw | sgd
+    lr: 0.001
+    weight_decay: 0.01
+    momentum: 0.9                   # SGD only
+
+  scheduler:
+    type: cosine                    # cosine | linear | step | exponential | none
+    warmup_steps: 100
+    step_size: 10                   # step scheduler
+    gamma: 0.1                      # step / exponential scheduler
+
+  # DDP multi-GPU (launch with: torchrun --nproc_per_node=N ...)
+  ddp: false
+  ddp_backend: nccl
+
+callbacks:
+  checkpoint:
+    save_dir: ./checkpoints
+    save_top_k: 3
+    monitor: val_loss
+    mode: min                       # min | max
+    # save_every_n_epochs: 5
+
+  early_stopping:
+    enabled: true
+    patience: 10
+    monitor: val_loss
+    mode: min
+    min_delta: 0.0
+
+  logging:
+    tensorboard: true
+    log_dir: ./runs
+    log_every_n_steps: 10
+    console: true

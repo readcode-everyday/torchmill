@@ -1,0 +1,9 @@
+torch>=2.0.0
+numpy
+pandas
+pydantic>=2.0
+pyyaml
+tensorboard
+tqdm
+scikit-learn
+# optional: relbench
