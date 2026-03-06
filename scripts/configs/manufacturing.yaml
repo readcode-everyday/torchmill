@@ -1,0 +1,29 @@
+# Manufacturing Production Data → RelBench conversion config
+# Source: https://www.kaggle.com/datasets/ziya07/manufacturing-production-data
+
+name: manufacturing
+description: "Manufacturing production data for quality prediction"
+
+columns:
+  timestamp: null        # auto-detect (look for date/time columns)
+  entity_id: null        # auto-detect (look for machine_id, product_id, etc.)
+  label: null            # auto-detect (look for defect, quality, target columns)
+
+synthetic_timestamp:
+  enabled: true          # generate if no timestamp column found
+  start: "2020-01-01"
+  freq: "1h"
+
+dimension_tables: {}     # auto-detect categorical columns
+
+task:
+  name: quality-predict
+  type: classification
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  temporal_split: true
+
+preprocessing:
+  drop_columns: []
+  fillna_strategy: median
