@@ -6,7 +6,7 @@ with open("README.md", encoding="utf-8") as f:
 setup(
     name="torchmill",
     version="0.1.0",
-    description="Standalone, model-agnostic PyTorch training framework",
+    description="Autonomous ML training optimizer with LLM brain",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="torchmill contributors",
@@ -21,6 +21,7 @@ setup(
         "tensorboard",
         "tqdm",
         "scikit-learn",
+        "openai>=1.0",
     ],
     extras_require={
         "relbench": ["relbench"],

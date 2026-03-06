@@ -1,0 +1,56 @@
+# torchmill.yaml — autonomous training optimizer config
+# Run with: torchmill run --config configs/torchmill.yaml
+
+# -----------------------------------------------------------------------
+# Mode 1: what to run (omit for 'torchmill watch' mode)
+# -----------------------------------------------------------------------
+command: 'python train.py --config cli_config.json'
+workdir: .
+training_config: cli_config.json   # JSON/YAML file torchmill can mutate between rounds
+
+# -----------------------------------------------------------------------
+# Brain (LLM) — called RARELY (3-5 times per 100-epoch run)
+# -----------------------------------------------------------------------
+brain:
+  provider: dashscope              # dashscope | anthropic | openai
+  model: qwen-plus
+  api_key: null                    # or set env var DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY
+
+# -----------------------------------------------------------------------
+# Watcher — 4-layer filtering stack
+# -----------------------------------------------------------------------
+watcher:
+  check_interval: 30               # seconds between log-file polls
+
+  # Layer 2: instant-kill rules (no LLM needed)
+  instant_kill:
+    nan_loss: true
+    grad_norm_above: 1000
+    loss_above: 100
+
+  # Layer 3: when to call the LLM brain
+  brain_triggers:
+    val_loss_rising_for: 5         # consecutive epochs of rising val loss
+    loss_plateau_for: 10           # epochs with no improvement
+    training_completed: true       # always analyze after training ends
+    every_n_epochs: 25             # periodic sanity check
+
+  # Layer 3: what to send to the LLM (keeps prompts compact)
+  summary:
+    max_history_epochs: 20         # only last N epochs in the table
+    include_experiment_history: true
+    max_tokens: 800
+
+# -----------------------------------------------------------------------
+# Autopilot (Mode 1 only)
+# -----------------------------------------------------------------------
+autopilot:
+  max_rounds: 10
+  max_total_hours: 24
+  approval_required: false         # true = pause and ask before each restart
+
+# -----------------------------------------------------------------------
+# History
+# -----------------------------------------------------------------------
+history:
+  dir: ./torchmill_runs

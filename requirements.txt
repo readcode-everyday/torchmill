@@ -6,4 +6,5 @@ pyyaml
 tensorboard
 tqdm
 scikit-learn
+openai>=1.0
 # optional: relbench
