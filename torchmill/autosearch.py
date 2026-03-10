@@ -366,8 +366,12 @@ def run_training(
     workdir: str,
     gpu_id: int,
     timeout: int,
+    num_gpus: int = 1,
 ) -> RunResult:
-    """Run training as a subprocess and capture all output."""
+    """Run training as a subprocess and capture all output.
+    
+    If num_gpus > 1, wraps the python command with torchrun for DDP.
+    """
     # Strip .inprogress for the actual config path passed to training
     # IMPORTANT: write clean copy to a TEMP location, NOT back into queue dir
     # (writing back to queue would let another worker pick it up — duplicate runs)
@@ -384,8 +388,16 @@ def run_training(
 
     cmd = command_template.replace("{config_path}", actual_config)
 
+    # DDP: replace 'python ' with 'torchrun --nproc_per_node=N ' in the command
+    if num_gpus > 1:
+        cmd = cmd.replace("python relbdata/", f"torchrun --nproc_per_node={num_gpus} relbdata/")
+        cmd = cmd.replace("python training/", f"torchrun --nproc_per_node={num_gpus} training/")
+        cmd = cmd.replace("python scripts/", f"torchrun --nproc_per_node={num_gpus} scripts/")
+
     env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    if num_gpus == 1:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    # For DDP, don't set CUDA_VISIBLE_DEVICES — let torchrun manage all GPUs
 
     logger.info(f"[GPU {gpu_id}] Running: {cmd}")
 
@@ -535,9 +547,13 @@ def write_heartbeat(heartbeat_file: str, gpu_id: int, status: str = "running") -
 # ---------------------------------------------------------------------------
 
 
-def worker_loop(gpu_id: int, cfg: AutosearchConfig, dry_run: bool = False) -> None:
-    """Main loop for a single GPU worker. Runs forever until killed."""
-    log = logging.getLogger(f"autosearch.gpu{gpu_id}")
+def worker_loop(gpu_id: int, cfg: AutosearchConfig, dry_run: bool = False, num_gpus: int = 1) -> None:
+    """Main loop for a single GPU worker. Runs forever until killed.
+    
+    When num_gpus > 1, uses DDP via torchrun (all GPUs for each experiment).
+    """
+    mode = f"DDP({num_gpus})" if num_gpus > 1 else f"GPU {gpu_id}"
+    log = logging.getLogger(f"autosearch.{mode}")
     best_val_loss = float("inf")
     pre_run_hash: Optional[str] = None
 
@@ -595,6 +611,7 @@ def worker_loop(gpu_id: int, cfg: AutosearchConfig, dry_run: bool = False) -> No
                 workdir=cfg.workdir,
                 gpu_id=gpu_id,
                 timeout=cfg.time_budget,
+                num_gpus=num_gpus,
             )
 
             # Parse metrics + errors
@@ -806,44 +823,12 @@ def main() -> None:
     try:
         if len(gpus) == 1:
             # Single GPU: run in main thread
-            worker_loop(gpus[0], cfg, dry_run=args.dry_run)
+            worker_loop(gpus[0], cfg, dry_run=args.dry_run, num_gpus=1)
         else:
-            # Multiple GPUs: one thread per GPU
-            threads = []
-            for gpu_id in gpus:
-                t = threading.Thread(
-                    target=worker_loop,
-                    args=(gpu_id, cfg, args.dry_run),
-                    daemon=True,
-                    name=f"worker-gpu{gpu_id}",
-                )
-                t.start()
-                threads.append(t)
-                # Stagger starts to avoid simultaneous git pulls
-                time.sleep(5)
-
-            logger.info(f"Started {len(threads)} GPU worker threads")
-            try:
-                while True:
-                    time.sleep(30)
-                    alive = [t for t in threads if t.is_alive()]
-                    if len(alive) < len(threads):
-                        dead = [t.name for t in threads if not t.is_alive()]
-                        logger.warning(f"Workers died and will be restarted: {dead}")
-                        # Restart dead workers
-                        threads = alive
-                        for t in [t for t in threads if not t.is_alive()]:
-                            gpu_id = int(t.name.replace("worker-gpu", ""))
-                            new_t = threading.Thread(
-                                target=worker_loop,
-                                args=(gpu_id, cfg, args.dry_run),
-                                daemon=True,
-                                name=f"worker-gpu{gpu_id}",
-                            )
-                            new_t.start()
-                            threads.append(new_t)
-            except KeyboardInterrupt:
-                logger.info("Shutting down...")
+            # Multiple GPUs: DDP mode — single sequential loop using all GPUs
+            # torchrun manages multi-GPU, we just run one experiment at a time
+            logger.info(f"DDP mode: {len(gpus)} GPUs, sequential experiments with torchrun")
+            worker_loop(gpus[0], cfg, dry_run=args.dry_run, num_gpus=len(gpus))
     finally:
         lock.release()
 
