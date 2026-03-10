@@ -827,10 +827,20 @@ def main() -> None:
             # Single GPU: run in main thread
             worker_loop(gpus[0], cfg, dry_run=args.dry_run, num_gpus=1)
         else:
-            # Multiple GPUs: DDP mode — single sequential loop using all GPUs
-            # torchrun manages multi-GPU, we just run one experiment at a time
-            logger.info(f"DDP mode: {len(gpus)} GPUs, sequential experiments with torchrun")
-            worker_loop(gpus[0], cfg, dry_run=args.dry_run, num_gpus=len(gpus))
+            # Multiple GPUs: parallel single-GPU workers (one experiment per GPU)
+            logger.info(f"Parallel mode: {len(gpus)} GPUs, one experiment per GPU")
+            threads = []
+            for gpu_id in gpus:
+                t = threading.Thread(
+                    target=worker_loop,
+                    args=(gpu_id, cfg),
+                    kwargs={"dry_run": args.dry_run, "num_gpus": 1},
+                    daemon=True,
+                )
+                t.start()
+                threads.append(t)
+            for t in threads:
+                t.join()
     finally:
         lock.release()
 
