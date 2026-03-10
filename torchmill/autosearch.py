@@ -395,6 +395,8 @@ def run_training(
         cmd = cmd.replace("python scripts/", f"torchrun --nproc_per_node={num_gpus} scripts/")
 
     env = os.environ.copy()
+    # Randomize MASTER_PORT to prevent collisions between concurrent experiments
+    env["MASTER_PORT"] = str(random.randint(29500, 39999))
     if num_gpus == 1:
         env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     # For DDP, don't set CUDA_VISIBLE_DEVICES — let torchrun manage all GPUs
