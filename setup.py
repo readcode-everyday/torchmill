@@ -29,6 +29,7 @@ setup(
     entry_points={
         "console_scripts": [
             "torchmill=torchmill.cli:main",
+            "torchmill-autosearch=torchmill.autosearch:main",
         ],
     },
     classifiers=[

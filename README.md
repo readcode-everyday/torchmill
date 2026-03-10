@@ -1,269 +1,380 @@
 # torchmill
 
-A standalone, model-agnostic PyTorch training framework. Provide a model, a dataset config, and hyperparameters — torchmill handles the rest.
+Autonomous ML experiment runner with LLM-powered analysis.
 
-## Features
+## What is torchmill?
 
-- **Config-driven** — single YAML file controls everything
-- **Model-agnostic** — register any `nn.Module` by import path or name
-- **Production-ready** — AMP mixed precision, gradient clipping, DDP multi-GPU, checkpointing
-- **Extensible callbacks** — early stopping, checkpointing, TensorBoard + console logging
-- **Multiple data sources** — CSV/Parquet and RelBench graph datasets
-- **CLI first** — `torchmill train --config config.yaml`
+torchmill is a two-machine system for running ML experiments 24/7 without babysitting:
 
-## Installation
+1. **autosearch** — runs on the GPU machine (5090-1). No API keys needed. Manages a queue of experiment configs, trains in parallel across GPUs, captures metrics + errors, and integrates with git.
+
+2. **brain** — runs on a separate machine with LLM access (ulap). Analyzes results.tsv and errors.tsv, suggests promising hyperparameter combinations, and pushes code fixes via git.
+
+The machines communicate only through **git and files** — no sockets, no shared database, no cloud service.
+
+## Architecture
+
+```
+┌──────────────────────────────────┐     git push/pull     ┌───────────────────────────────────┐
+│         GPU Machine (5090-1)     │ ◄──────────────────── │        Brain Machine (ulap)        │
+│                                  │                        │                                   │
+│  torchmill-autosearch            │                        │  (Volt / LLM brain — separate)    │
+│  ├── worker GPU 0                │ ──────────────────────►│                                   │
+│  │   ├── git pull                │     results + errors   │  1. ssh: read results.tsv         │
+│  │   ├── pick config from queue  │                        │  2. ssh: read errors.tsv          │
+│  │   ├── run training (timeout)  │                        │  3. analyze with LLM              │
+│  │   ├── parse logs → metrics    │                        │  4. write configs/queue/*.json    │
+│  │   ├── write results.tsv       │                        │  5. git push                      │
+│  │   └── git keep/discard        │                        │  6. (optionally push code fixes)  │
+│  └── worker GPU 1 (same loop)   │                        │                                   │
+│                                  │                        │                                   │
+│  configs/queue/*.json  ◄─────────┼────────────────────────┘                                   │
+│  results.tsv, errors.tsv ────────┼────────────────────────►                                   │
+│  heartbeat.txt ──────────────────┼────────────────────────►                                   │
+└──────────────────────────────────┘                        └───────────────────────────────────┘
+```
+
+## Quick Start
+
+### GPU Machine (5090-1)
 
 ```bash
+# Install torchmill (no API keys needed)
 pip install -e .
-# with RelBench support:
-pip install -e ".[relbench]"
+
+# Copy and edit the example config
+cp configs/autosearch_example.yaml autosearch.yaml
+# Edit: set workdir, command_template, gpus, search_space
+
+# Create the queue directory
+mkdir -p configs/queue configs/done
+
+# Drop an experiment config in the queue
+echo '{"lr": 0.001, "hidden_dim": 128, "epochs": 15}' > configs/queue/exp001.json
+
+# Start autosearch in a tmux session
+tmux new -s autosearch
+torchmill-autosearch --config autosearch.yaml
+
+# Or run directly with Python
+python -m torchmill.autosearch --config autosearch.yaml
 ```
 
-## Quick start
+### Brain Machine (ulap)
 
-### 1. Define your model
+```bash
+# Install with LLM deps
+pip install torchmill openai
 
-```python
-# mymodels.py
-import torch.nn as nn
-from torchmill.models import register_model
+# Check results (via SSH or after git pull)
+ssh 5090-1 cat /path/to/results.tsv
 
-@register_model("my_mlp")
-class MLP(nn.Module):
-    def __init__(self, input_dim=10, hidden_dim=64, output_dim=1):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim),
-        )
-
-    def forward(self, x):
-        return self.net(x)
+# The brain reads results and pushes new configs via git
+# (See interface contract below)
 ```
 
-### 2. Write a config
+## Prerequisites
+
+### GPU Machine
+- Python 3.10+
+- PyTorch 2.0+
+- `pyyaml` (autosearch only needs stdlib + yaml)
+- Your training environment (conda, virtualenv, etc.)
+- git
+
+### Brain Machine
+- Python 3.10+
+- `openai>=1.0` or Anthropic API client
+- SSH access to GPU machine (read-only is fine)
+- git (with push access to shared repo)
+
+## Configuration Reference
 
 ```yaml
-# config.yaml
-model:
-  class: mymodels.MLP
-  args:
-    input_dim: 10
-    hidden_dim: 128
-    output_dim: 1
+# autosearch.yaml — complete reference
 
-data:
-  type: csv
-  train_path: ./data/train.csv
-  val_path: ./data/val.csv
-  target_column: label
-  batch_size: 64
-  num_workers: 4
+# Training command. {config_path} is replaced with the experiment config file.
+# Use conda/venv activation if needed.
+command_template: >-
+  bash -c 'source ~/anaconda3/etc/profile.d/conda.sh &&
+  conda activate myenv &&
+  python train.py --config {config_path}'
 
-training:
-  epochs: 100
-  seed: 42
-  device: auto          # auto-detects CUDA / MPS / CPU
-  task: regression      # or: classification, auto
-  amp: true
-  gradient_clip: 1.0
-  optimizer:
-    type: adamw
-    lr: 0.001
-    weight_decay: 0.01
-  scheduler:
-    type: cosine
-    warmup_steps: 200
+# Working directory for git operations and relative paths
+workdir: /home/user/my-ml-project
 
-callbacks:
-  checkpoint:
-    save_dir: ./checkpoints
-    save_top_k: 3
-    monitor: val_loss
-    mode: min
-  early_stopping:
-    enabled: true
-    patience: 10
-    monitor: val_loss
-  logging:
-    tensorboard: true
-    log_dir: ./runs
-    log_every_n_steps: 10
+# GPU worker assignment (one thread per GPU)
+gpus: [0, 1]
+
+# Kill training after this many seconds
+time_budget: 1800  # 30 minutes
+
+# File paths (relative to this config file or absolute)
+queue_dir: ./configs/queue
+done_dir:  ./configs/done
+results_file: ./results.tsv
+errors_file:  ./errors.tsv
+heartbeat_file: ./heartbeat.txt
+lock_file: ./autosearch.lock
+
+# Git integration
+git_enabled: true
+git_pull_before_run: true    # pull latest code before each experiment
+git_commit_results: false    # don't auto-commit results.tsv
+git_keep_on_improve: true    # advance branch only if val_loss improved
+
+# Auto-generate: sample random configs when queue is empty
+auto_generate:
+  enabled: true
+  search_space:
+    lr: [0.0001, 0.0003, 0.0005, 0.001, 0.003]
+    hidden_dim: [64, 128, 256]
+    num_layers: [2, 3, 4]
+    num_heads: [4, 8]
+    dropout: [0.0, 0.05, 0.1, 0.2]
+    batch_size: [32, 64, 128, 256]
+    scheduler: [cosine, linear]
+    warmup_steps: [0, 100, 500]
+    weight_decay: [0.0, 0.01, 0.05]
+  base_config:  # merged with sampled values; these stay fixed
+    dataset: trial
+    task: study-outcome
+    epochs: 15
+    device: cuda
+    amp: true
+    seed: 42
 ```
 
-### 3. Train
+## How It Works
+
+### Per-GPU Worker Loop
+
+```
+while True:
+    write_heartbeat()
+    git pull --rebase (picks up code fixes from brain)
+    config = pick_from_queue() or generate_random()
+    if no config: sleep(60); continue
+    snapshot_commit = git_current_hash()
+    run_training(config, timeout=time_budget)
+    metrics, errors = parse_logs(stdout + stderr)
+    write results.tsv row
+    if errors: write errors.tsv row
+    if val_loss improved: keep (branch advances)
+    else: git reset --hard snapshot_commit (discard)
+    move config to done/
+```
+
+### Git Keep/Discard Strategy
+
+Each experiment runs on top of the current HEAD. If val_loss improves, the commit stands and the branch advances. If the result is worse (or crashes), we `git reset --hard` to the pre-experiment commit — reverting any model weight changes from that run. This means:
+
+- The git branch always tracks the best-seen checkpoint
+- Code fixes from the brain are automatically pulled before each run
+- `results.tsv` and `errors.tsv` are never reverted — they accumulate all history
+
+### Timeout Handling
+
+If training exceeds `time_budget` seconds, the subprocess is killed (SIGKILL), an error row is written to errors.tsv with `error_type=Timeout`, and the worker moves immediately to the next experiment.
+
+### Crash Recovery
+
+The outer loop wraps everything in `try/except Exception`. Any unexpected crash (disk full, git conflict, import error) is logged and the worker sleeps 60s before retrying. The daemon never exits.
+
+## CLI Reference
 
 ```bash
-torchmill train --config config.yaml
+# Start daemon (foreground — use tmux or screen)
+torchmill-autosearch --config autosearch.yaml
+
+# Dry run: show commands without executing training
+torchmill-autosearch --config autosearch.yaml --dry-run
+
+# Show current status
+torchmill-autosearch --config autosearch.yaml --status
+
+# Run only one GPU (useful for debugging)
+torchmill-autosearch --config autosearch.yaml --gpu 0
+
+# Verbose logging
+torchmill-autosearch --config autosearch.yaml -v
+
+# Python module style
+python -m torchmill.autosearch --config autosearch.yaml
 ```
 
-Validate a config without training:
+## Output Files
 
-```bash
-torchmill validate --config config.yaml
+### results.tsv
+
+Tab-separated, one row per experiment. Appended after each run.
+
+```
+commit  gpu  val_loss  train_loss  auroc  memory_gb  epochs  status  config_summary  error_type
+a1b2c3  0    0.6931    0.7012      0.50   8.2        15/15   keep    lr=5e-4 hd=128
+b2c3d4  1    0.6512    0.6201      0.58   8.4        15/15   keep    lr=3e-4 hd=256
+c3d4e5  0    999.0     999.0       0.0    0.0        3/15    crash   lr=1e-3 hd=512  IndexError
 ```
 
-## Python API
+Fields:
+- `commit` — short git hash at time of run
+- `gpu` — CUDA device index
+- `val_loss` — final validation loss (999.0 if crash/missing)
+- `train_loss` — final training loss
+- `auroc` — AUROC score (0.0 if not available)
+- `memory_gb` — peak GPU memory used
+- `epochs` — completed/total
+- `status` — `keep`, `discard`, `crash`, or `timeout`
+- `config_summary` — compact hyperparameter string (`lr=5e-4 hd=128 nl=3`)
+- `error_type` — empty if success, else `IndexError`, `OOM`, `NaN`, `Timeout`, etc.
+
+### errors.tsv
+
+Tab-separated, one row per error (experiments with errors may have multiple rows).
+
+```
+commit    timestamp              gpu  error_type  error_location          error_message            context
+b2c3d4    2026-03-10T14:30:00Z  0    IndexError  models/kumorfm.py:342  list index out of range  line1 | line2
+```
+
+### heartbeat.txt
+
+Updated every loop iteration. The brain reads this to know the daemon is alive.
+
+```
+timestamp=2026-03-10T14:30:00+00:00
+gpu=0
+status=running
+pid=12345
+```
+
+## Interface Contract (for the Brain)
+
+The brain machine reads and writes via git. Here's the exact contract:
+
+### Brain reads:
+- `results.tsv` — experiment outcomes (git pull or SSH)
+- `errors.tsv` — crash details including file, line, traceback context
+- `heartbeat.txt` — liveness check
+- `git log --oneline -20` — recent experiment commits
+- `git diff HEAD~5 HEAD` — recent code changes
+
+### Brain writes:
+- `configs/queue/*.json` — new experiment configs to run
+- Source code fixes (pushed via `git push`)
+
+### Config format the brain should write:
+
+```json
+{
+  "lr": 0.0003,
+  "hidden_dim": 256,
+  "num_layers": 3,
+  "num_heads": 8,
+  "dropout": 0.05,
+  "batch_size": 64,
+  "scheduler": "cosine",
+  "warmup_steps": 100,
+  "weight_decay": 0.01,
+  "dataset": "trial",
+  "task": "study-outcome",
+  "epochs": 15,
+  "seed": 42
+}
+```
+
+Files are picked in alphabetical order. Use numeric prefixes to set priority:
+```
+configs/queue/000_top_priority.json
+configs/queue/001_normal.json
+```
+
+## Comparison with Alternatives
+
+| Feature | torchmill autosearch | Ray Tune | Karpathy autoresearch |
+|---------|---------------------|----------|----------------------|
+| No API keys on GPU machine | ✓ | ✓ | ✗ |
+| Multi-GPU parallel workers | ✓ | ✓ | ✗ |
+| LLM brain (separate machine) | ✓ | ✗ | ✓ |
+| Git-integrated keep/discard | ✓ | ✗ | ✗ |
+| Error capture + structured log | ✓ | partial | ✗ |
+| Bulletproof daemon | ✓ | ✗ | ✗ |
+| Dependency footprint | minimal | heavy | medium |
+| Timeout handling | ✓ | ✓ | ✗ |
+| Queue from external source | ✓ | ✗ | ✗ |
+
+## torchmill Training Framework (existing components)
+
+autosearch is fully standalone, but torchmill also ships a general training framework:
+
+- `torchmill/trainer.py` — model-agnostic training loop with callbacks
+- `torchmill/config.py` — Pydantic config schema
+- `torchmill/callbacks/` — checkpoint, early stopping, logging callbacks
+- `torchmill/data/` — CSV and RelBench dataset adapters
+- `torchmill/models/registry.py` — model registry for dynamic instantiation
+
+### Quick training example:
 
 ```python
 from torchmill.config import TorchmillConfig
 from torchmill.trainer import Trainer
-from torchmill.models import get_model
-from torchmill.data import CSVDataset
 
 config = TorchmillConfig.from_yaml("config.yaml")
-model  = get_model(config.model.class_path, config.model.args)
-
-train_ds = CSVDataset("data/train.csv", target_column="label")
-val_ds   = CSVDataset("data/val.csv",   target_column="label")
-
 trainer = Trainer(config)
-metrics = trainer.fit(model, train_ds, val_ds)
-
-test_ds      = CSVDataset("data/test.csv", target_column="label")
-test_metrics = trainer.evaluate(model, test_ds)
+metrics = trainer.fit(model, train_dataset, val_dataset)
 ```
 
-## Config reference
+See `configs/example.yaml` for a full training config reference.
 
-### `model`
-| Key | Type | Description |
-|-----|------|-------------|
-| `class` | str | Dotted import path **or** registry name of an `nn.Module` |
-| `args` | dict | Keyword arguments forwarded to the model constructor |
-
-### `data`
-| Key | Default | Description |
-|-----|---------|-------------|
-| `type` | `csv` | `csv` \| `relbench` \| `custom` |
-| `train_path` | — | CSV/Parquet path (required for `type: csv`) |
-| `val_path` | — | Validation split path |
-| `test_path` | — | Test split path |
-| `target_column` | — | Column name for labels |
-| `batch_size` | `32` | DataLoader batch size |
-| `num_workers` | `0` | DataLoader worker processes |
-| `dataset_name` | — | RelBench dataset name (required for `type: relbench`) |
-| `task_name` | — | RelBench task name |
-
-### `training`
-| Key | Default | Description |
-|-----|---------|-------------|
-| `epochs` | `100` | Total training epochs |
-| `seed` | `42` | Random seed |
-| `device` | `auto` | `auto` / `cpu` / `cuda` / `mps` / `cuda:N` |
-| `task` | `auto` | `classification` \| `regression` \| `auto` |
-| `amp` | `false` | Mixed precision (CUDA only) |
-| `gradient_clip` | `null` | Max gradient norm |
-| `optimizer.type` | `adamw` | `adam` \| `adamw` \| `sgd` |
-| `optimizer.lr` | `0.001` | Learning rate |
-| `scheduler.type` | `none` | `cosine` \| `linear` \| `step` \| `exponential` \| `none` |
-| `scheduler.warmup_steps` | `0` | Linear warmup steps |
-| `ddp` | `false` | Enable DistributedDataParallel |
-
-### `callbacks.checkpoint`
-| Key | Default | Description |
-|-----|---------|-------------|
-| `save_dir` | `./checkpoints` | Directory for checkpoint files |
-| `save_top_k` | `3` | Keep top-K checkpoints (0 = keep all) |
-| `monitor` | `val_loss` | Metric to monitor |
-| `mode` | `min` | `min` \| `max` |
-| `save_every_n_epochs` | `null` | Also save every N epochs |
-
-### `callbacks.early_stopping`
-| Key | Default | Description |
-|-----|---------|-------------|
-| `enabled` | `true` | Enable early stopping |
-| `patience` | `10` | Epochs with no improvement before stopping |
-| `monitor` | `val_loss` | Metric to monitor |
-| `mode` | `min` | `min` \| `max` |
-| `min_delta` | `0.0` | Minimum improvement threshold |
-
-### `callbacks.logging`
-| Key | Default | Description |
-|-----|---------|-------------|
-| `tensorboard` | `true` | Write TensorBoard summaries |
-| `log_dir` | `./runs` | TensorBoard log directory |
-| `log_every_n_steps` | `10` | Step-level log frequency |
-| `console` | `true` | Print metrics to stdout |
-
-## Custom datasets
-
-```python
-from torch.utils.data import Dataset
-from torchmill.data import register_dataset
-
-@register_dataset("my_dataset")
-class MyDataset(Dataset):
-    def __init__(self, path, **kwargs):
-        ...
-    def __len__(self): ...
-    def __getitem__(self, i): ...
-```
-
-Then in your config:
-
-```yaml
-data:
-  type: custom
-```
-
-And instantiate manually in your training script, passing the dataset to `trainer.fit()`.
-
-## Multi-GPU (DDP)
-
-```yaml
-training:
-  ddp: true
-  ddp_backend: nccl
-```
-
-Launch with:
-
-```bash
-torchrun --nproc_per_node=4 -m torchmill.cli train --config config.yaml
-```
-
-## Loading a checkpoint
-
-```python
-from torchmill.callbacks.checkpoint import CheckpointCallback
-import torch.nn as nn
-
-model = nn.Linear(10, 1)
-state = CheckpointCallback.load_checkpoint("checkpoints/best.pt", model)
-print(f"Loaded from epoch {state['epoch']}, metrics: {state['metrics']}")
-```
-
-## Project structure
+## Project Structure
 
 ```
 torchmill/
 ├── torchmill/
 │   ├── __init__.py           # version
-│   ├── cli.py                # CLI entry point
+│   ├── autosearch.py         # autonomous experiment runner (new)
+│   ├── log_extractor.py      # training log parser (new)
+│   ├── cli.py                # training CLI
 │   ├── config.py             # Pydantic config schema
-│   ├── trainer.py            # Core training loop
+│   ├── trainer.py            # core training loop
 │   ├── data/
-│   │   ├── base.py           # Dataset registry
-│   │   ├── csv_dataset.py    # CSV/Parquet loader
-│   │   └── relbench.py       # RelBench adapter
+│   │   ├── base.py
+│   │   ├── csv_dataset.py
+│   │   └── relbench.py
 │   ├── models/
-│   │   └── registry.py       # Model registry
+│   │   └── registry.py
 │   ├── callbacks/
 │   │   ├── checkpoint.py
 │   │   ├── early_stopping.py
 │   │   └── logging.py
 │   └── utils/
-│       └── device.py         # Device auto-detection
+│       └── device.py
 ├── configs/
-│   └── example.yaml
+│   ├── example.yaml
+│   ├── autosearch_example.yaml   # autosearch config template (new)
+│   └── queue/
+│       └── README.md             # queue directory docs (new)
 ├── tests/
-│   ├── test_trainer.py
 │   ├── test_config.py
-│   └── test_registry.py
+│   ├── test_registry.py
+│   ├── test_trainer.py
+│   ├── test_log_extractor.py     # (new)
+│   └── test_autosearch.py        # (new)
 ├── setup.py
 └── requirements.txt
+```
+
+## Development
+
+```bash
+# Install in editable mode
+pip install -e .
+
+# Run all tests
+pytest tests/ -v
+
+# Run only autosearch tests
+pytest tests/test_log_extractor.py tests/test_autosearch.py -v
 ```
 
 ## License

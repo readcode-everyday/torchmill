@@ -1,0 +1,76 @@
+# autosearch_example.yaml — example config for torchmill-autosearch
+#
+# Copy this to autosearch.yaml and edit for your setup.
+# Run with: torchmill-autosearch --config autosearch.yaml
+
+# ---------------------------------------------------------------------------
+# Training command template
+# {config_path} is replaced with the actual experiment config file path.
+# Use conda/virtualenv activation if needed.
+# ---------------------------------------------------------------------------
+command_template: >-
+  bash -c 'source /home/ubuntu/anaconda3/etc/profile.d/conda.sh &&
+  conda activate pyg28 &&
+  python relbdata/train_on_relbench.py --config {config_path}'
+
+# Working directory for git operations and relative paths
+workdir: /home/wangk/kumorfm-zhaoweizun
+
+# ---------------------------------------------------------------------------
+# GPU assignment — one worker thread per GPU
+# ---------------------------------------------------------------------------
+gpus: [0, 1]  # CUDA_VISIBLE_DEVICES values for each worker
+
+# ---------------------------------------------------------------------------
+# Time budget per experiment (seconds)
+# Experiment is killed if it exceeds this.
+# ---------------------------------------------------------------------------
+time_budget: 1800  # 30 minutes
+
+# ---------------------------------------------------------------------------
+# Paths (relative to this config file, or absolute)
+# ---------------------------------------------------------------------------
+queue_dir: ./configs/queue       # pending experiment configs (JSON/YAML files)
+done_dir:  ./configs/done        # completed configs moved here
+results_file: ./results.tsv
+errors_file:  ./errors.tsv
+heartbeat_file: ./heartbeat.txt
+lock_file: ./autosearch.lock
+
+# ---------------------------------------------------------------------------
+# Git integration
+# ---------------------------------------------------------------------------
+git_enabled: true
+git_pull_before_run: true        # pull latest code + model fixes before each experiment
+git_commit_results: false        # don't auto-commit results.tsv (human reviews first)
+git_keep_on_improve: true        # advance branch if val_loss improved
+
+# ---------------------------------------------------------------------------
+# Auto-generate: if queue is empty, generate random configs from search space
+# ---------------------------------------------------------------------------
+auto_generate:
+  enabled: true
+  search_space:
+    lr: [0.0001, 0.0003, 0.0005, 0.001, 0.003]
+    hidden_dim: [64, 128, 256]
+    num_layers: [2, 3, 4]
+    num_heads: [4, 8]
+    dropout: [0.0, 0.05, 0.1, 0.2]
+    batch_size: [32, 64, 128, 256]
+    scheduler: [cosine, linear]
+    warmup_steps: [0, 100, 500]
+    weight_decay: [0.0, 0.01, 0.05]
+  base_config:  # merged with random samples; these fields stay fixed
+    dataset: trial
+    task: study-outcome
+    max_samples_per_epoch: 5000
+    epochs: 15
+    relbench_cache_dir: /home/wangk/data/relbench
+    device: cuda
+    amp: true
+    seed: 42
+    enable_auto_download: false
+    num_workers: 4
+    val_num_workers: 0
+    pin_memory: true
+    prefetch_factor: 4

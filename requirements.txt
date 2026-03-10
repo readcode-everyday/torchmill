@@ -6,5 +6,6 @@ pyyaml
 tensorboard
 tqdm
 scikit-learn
-openai>=1.0
+# openai is optional — only needed for the brain machine (ulap), not the GPU machine
+# openai>=1.0
 # optional: relbench
