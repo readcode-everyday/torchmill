@@ -369,10 +369,16 @@ def run_training(
 ) -> RunResult:
     """Run training as a subprocess and capture all output."""
     # Strip .inprogress for the actual config path passed to training
+    # IMPORTANT: write clean copy to a TEMP location, NOT back into queue dir
+    # (writing back to queue would let another worker pick it up — duplicate runs)
     actual_config = config_path
     if actual_config.endswith(".inprogress"):
-        # Write a clean copy without the suffix so the training script can find it
-        clean_path = actual_config[: -len(".inprogress")]
+        clean_name = Path(config_path).stem  # e.g. "p1_trial_lr0.0001.json"
+        if clean_name.endswith(".json"):
+            clean_name = clean_name  # already has .json
+        else:
+            clean_name = clean_name + ".json"
+        clean_path = os.path.join(tempfile.gettempdir(), f"autosearch_{clean_name}")
         shutil.copy2(actual_config, clean_path)
         actual_config = clean_path
 

@@ -1,0 +1,2 @@
+[console_scripts]
+torchmill = torchmill.cli:main

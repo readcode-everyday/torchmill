@@ -1,0 +1,30 @@
+Metadata-Version: 2.4
+Name: torchmill
+Version: 0.1.0
+Summary: Standalone, model-agnostic PyTorch training framework
+Author: torchmill contributors
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: torch>=2.0.0
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: pydantic>=2.0
+Requires-Dist: pyyaml
+Requires-Dist: tensorboard
+Requires-Dist: tqdm
+Requires-Dist: scikit-learn
+Provides-Extra: relbench
+Requires-Dist: relbench; extra == "relbench"
+Dynamic: author
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+# torchmill
