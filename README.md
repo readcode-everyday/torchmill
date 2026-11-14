@@ -6,7 +6,7 @@ Autonomous ML experiment runner with LLM-powered analysis.
 
 torchmill is a two-machine system for running ML experiments 24/7 without babysitting:
 
-1. **autosearch** — runs on the GPU machine (5090-1). No API keys needed. Manages a queue of experiment configs, trains in parallel across GPUs, captures metrics + errors, and integrates with git.
+1. **autosearch** — runs on the GPU machine. No API keys needed. Manages a queue of experiment configs, trains in parallel across GPUs, captures metrics + errors, and integrates with git.
 
 2. **brain** — runs on a separate machine with LLM access (ulap). Analyzes results.tsv and errors.tsv, suggests promising hyperparameter combinations, and pushes code fixes via git.
 
@@ -16,7 +16,7 @@ The machines communicate only through **git and files** — no sockets, no share
 
 ```
 ┌──────────────────────────────────┐     git push/pull     ┌───────────────────────────────────┐
-│         GPU Machine (5090-1)     │ ◄──────────────────── │        Brain Machine (ulap)        │
+│         GPU Machine              │ ◄──────────────────── │        Brain Machine (ulap)        │
 │                                  │                        │                                   │
 │  torchmill-autosearch            │                        │  (Volt / LLM brain — separate)    │
 │  ├── worker GPU 0                │ ──────────────────────►│                                   │
@@ -36,7 +36,7 @@ The machines communicate only through **git and files** — no sockets, no share
 
 ## Quick Start
 
-### GPU Machine (5090-1)
+### GPU Machine
 
 ```bash
 # Install torchmill (no API keys needed)
@@ -67,7 +67,7 @@ python -m torchmill.autosearch --config autosearch.yaml
 pip install torchmill openai
 
 # Check results (via SSH or after git pull)
-ssh 5090-1 cat /path/to/results.tsv
+ssh gpu-host cat /path/to/results.tsv
 
 # The brain reads results and pushes new configs via git
 # (See interface contract below)

@@ -5,7 +5,7 @@ Autonomous research agent for KumoRFM — a relational foundation model trained 
 ## Environment
 
 ```bash
-# Machine: 5090-1 (2x NVIDIA RTX 5090, 32GB each)
+# Machine: GPU host (2x NVIDIA RTX GPUs, 32GB each)
 # Conda env: pyg28
 # Activation (MUST prefix every command):
 source /home/ubuntu/anaconda3/etc/profile.d/conda.sh && conda activate pyg28
